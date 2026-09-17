@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Summer 2026 Work Term Report · Alex Daniel</title>
+    <meta name="description" content="Alex Daniel's Summer 2026 co-op work term report: migrating AdKnown's production Airflow pipeline off direct database access, one canary-gated phase at a time.">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <header class="masthead">
+        <div class="masthead-in">
+            <a class="wordmark" href="#home">Alex Daniel <span>Work term report no. 4</span></a>
+            <nav aria-label="Report sections">
+                <ul>
+                    <li><a href="#home">Cover</a></li>
+                    <li><a href="#employer">Employer</a></li>
+                    <li><a href="#description">The job</a></li>
+                    <li><a href="#goals">Goals</a></li>
+                    <li><a href="#conclusion">Conclusion</a></li>
+                    <li><a href="#acknowledgements">Thanks</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+
+        <!-- ================= 1 COVER ================= -->
+        <section id="home">
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">1</span>
+                        <p class="railtag">Cover sheet</p>
+                    </div>
+                    <div class="col">
+                        <p class="kicker">Summer 2026 · University of Guelph</p>
+                        <h1>Rewiring a live pipeline for Airflow&nbsp;3</h1>
+                        <p class="lede">This was my fourth co-op work term and my second at AdKnown Inc. My main project was the code migration that prepares our roughly 300 production Airflow DAGs for Airflow 3. Anywhere a worker used to read the metadata database directly, I had to replace that access with an API call. I shipped the work in gated phases so the nightly pipeline never went down.</p>
+
+                        <div class="coversheet">
+                            <dl>
+                                <dt>Employer</dt>
+                                <dd><img src="img/adknown-logo.png" alt="">AdKnown Inc., Guelph, Ontario</dd>
+
+                                <dt>Term</dt>
+                                <dd>May - August 2026 <span class="sep">·</span> four months</dd>
+
+                                <dt>Role</dt>
+                                <dd>Software Developer, Data Engineering</dd>
+
+                                <dt>Repositories</dt>
+                                <dd>airflow-data-pipeline <span class="sep">·</span> afs-common <span class="sep">·</span> afs-cron-jobs</dd>
+
+                                <dt>Shipped</dt>
+                                <dd><span class="num">10</span> pull requests merged <span class="sep">·</span> <span class="num">8</span> migration phases, 1.10 → 1.17</dd>
+
+                                <dt>Scale</dt>
+                                <dd><span class="num">308</span> DAGs in production, from <span class="num">107</span> definition files</dd>
+                            </dl>
+                        </div>
+
+                        <div class="actions">
+                            <a class="btn" href="#employer">Read the report</a>
+                            <a class="txtlink" href="https://alexdaniel5.github.io/work-term-report-3/">Winter 2026 report →</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="band band--sunk band--tight">
+                <div class="grid">
+                    <div class="rail">
+                        <p class="railtag">Abstract</p>
+                    </div>
+                    <div class="col">
+                        <p>This site covers my Summer 2026 work term at AdKnown Inc., where I returned to the data engineering team as a Software Developer. Last term I spent most of my time building new pipelines. This term was closer to the opposite. I worked inside pipelines that already existed and changed how they talk to the platform underneath them, all while they kept running every night.</p>
+                        <p>If you only read one section, I'd pick <a href="#shipping-safely">Section 3.2, on how I shipped the migration safely</a>. The technical work was interesting on its own, but the part that changed how I develop was learning to decide up front how much of production a change could touch. I also found out that one of the safety techniques I was most excited about is a lot weaker than it looks.</p>
+                        <p>The rest of the report covers the employer, what the job involved day to day, the three learning goals I set for the term with a reflection on each, and what I'm carrying into the next one.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= 2 EMPLOYER ================= -->
+        <section id="employer">
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">2</span>
+                        <p class="railtag">Employer</p>
+                        <p class="note">Airflow <b>2.3.2 → 2.10.5</b> in March 2026. <b>3.1</b> is next, and is the reason this term existed.</p>
+                    </div>
+                    <div class="col">
+                        <h2>AdKnown Inc.</h2>
+                        <p class="lede">AdKnown is a digital advertising technology company in Guelph, Ontario. It sits between advertisers and publishers: it buys traffic across Google, Bing, Facebook and Taboola, monetizes it through search and content partners, and keeps the difference. The whole model depends on the numbers being right, which is why an advertising company employs a data engineering team at all.</p>
+
+                        <h3>Cost on one side, revenue on the other</h3>
+                        <p>Every night the pipeline pulls what AdKnown spent from the ad platforms and what it earned from the monetization partners, then joins the two halves so the company can see profitability by campaign, country, device and tag. The hard part is that no two partners describe the same event the same way. Google reports in one currency and timezone, Bing hands you a CSV over a different API, and Inuvo drops files on an FTP server. Even the word "click" means something slightly different to each of them.</p>
+                        <p>The work falls under data engineering and cloud infrastructure: scheduled ETL orchestration with Apache Airflow, a data lake on Amazon S3 queried with Athena, and MySQL for the operational side. The hard problem is rarely the SQL itself. It's that the pipeline has to keep producing trustworthy numbers while the platforms it depends on keep changing underneath it. This term the orchestrator was changing underneath us too.</p>
+
+                        <p class="stackline"><b>Stack</b><br>Apache Airflow · Python 3.10 · PHP · Celery + Redis · MySQL · S3 · Athena + Glue · Docker · Bitbucket Pipelines → CodeDeploy → EC2</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <p class="railtag">Six facts</p>
+                    </div>
+                    <div class="col">
+                        <ol class="speclist">
+                            <li><b>The scheduler is the core of the product.</b> 308 DAGs run in production, from about 107 definition files plus 150-odd more built dynamically out of MySQL config rows. Adding a new built table is often a SQL file and a single <code>INSERT</code>, thanks to an in-house generator the team calls Cerebro.</li>
+                            <li><b>Airflow has been a moving target.</b> The stack went from 2.3.2 to 2.10.5 in March 2026, and 3.1 is next. That upgrade is more than a version bump. Airflow 3 takes the metadata database away from task workers entirely.</li>
+                            <li><b>Two codebases, two languages.</b> The Python side (<code>airflow-data-pipeline</code>) imports and reports on data. The PHP side (<code>afs-common</code>, <code>afs-cron-jobs</code>) runs the other direction: it creates and manages the actual ad campaigns. I worked in all three repositories this term.</li>
+                            <li><b>Deploys are deliberately unremarkable.</b> Merging to master triggers Bitbucket Pipelines, which packages the code and rolls it to EC2 through CodeDeploy. Because deploying is cheap, the decisions that actually matter are elsewhere: how much of production a change is allowed to touch on its first day.</li>
+                            <li><b>Athena bills you for what you scan.</b> Output lands in S3 as Snappy-compressed Parquet, partitioned by date. Two queries returning identical results can differ enormously in cost depending on whether they respect partition boundaries, which makes query shape a budgeting concern and not just a performance one.</li>
+                            <li><b>The whole thing runs on a laptop.</b> Scheduler, webserver, Celery workers, Redis and MySQL in Docker Compose, seeded from a production dump. Almost everything I shipped this term was proven there first.</li>
+                        </ol>
+                    </div>
+
+                    <figure class="photo photo--wide railphoto">
+                        <img src="img/infra-racks.jpg" alt="Server racks with fibre cabling in a data centre">
+                        <figcaption>A data centre that isn't AdKnown's. Ours is a rented slice of one: EC2 instances, an S3 bucket, and a MySQL database that everything else orbits.</figcaption>
+                    </figure>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= 3 THE JOB ================= -->
+        <section id="description">
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">3</span>
+                        <p class="railtag">The job</p>
+                        <p class="note">Three repositories, two languages, one ticket that ran the length of the term.</p>
+                    </div>
+                    <div class="col">
+                        <h2>Software Developer, Data Engineering</h2>
+                        <p class="lede">On paper my role was the same as last term. In practice it moved from building new pipelines to operating on existing ones. I rewrote the parts of 300 production DAGs that talk to Airflow's internals while those DAGs kept running on their normal schedules and the rest of the team kept shipping around me.</p>
+
+                        <p class="label">What the job needed</p>
+                        <p>Python was the core of it, though less about writing new scripts and more about reading a large, mature codebase and changing shared code without breaking its callers. A lot of my work lived in custom operators and plugins that dozens of DAGs inherit from, so I was constantly asking whether a change still behaved identically for the 300 DAGs I wasn't actively thinking about.</p>
+                        <p>Beyond Python there was SQL against both MySQL and Athena, enough HTTP and REST fluency to reason about status codes, pagination and idempotency, Docker for the local stack, Git for a branching workflow with real code review, and PHP for the campaign-management side of the business. Reading API documentation carefully turned out to be a skill of its own. Several bugs this term came from an endpoint that accepted a request and then quietly did something other than what the docs implied.</p>
+
+                        <p class="label">Class versus on the job</p>
+                        <p>School gave me the parts that generalize: how relational data is modelled, how HTTP works, how to read code I didn't write. What school doesn't really teach is the discipline around a change. Shipping isn't the moment you finish writing the code, and on a system this size the important question is usually not "is it correct?" but "if I'm wrong, who finds out, and how?" That was the real curriculum this term.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3.1 the migration -->
+            <div class="band band--sunk">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">3.1</span>
+                        <p class="railtag">DATA-1081</p>
+                        <p class="note"><b>AirflowApiClient</b>: 649 lines, one shared entry point for every caller that used to reach for the ORM.</p>
+                    </div>
+                    <div class="col">
+                        <h2>Getting 308 DAGs ready for Airflow 3</h2>
+                        <p>Airflow 3 makes one change that breaks a surprising amount of working code: task workers no longer get a connection to the metadata database. In Airflow 2 a task can import Airflow's own models and query them directly. It can build a <code>DagBag</code>, open a <code>settings.Session()</code>, and ask the database what state another DAG run is in. It works, it's fast, and our codebase leaned on it in a lot of places: deferrable operators that wait on other DAGs, a rescheduler that clears and recreates runs, sync jobs that look up the last successful execution date, and monitors that pause DAGs by writing to the <code>dag</code> table.</p>
+                        <p>In Airflow 3 all of that raises instead. Workers are stateless, and the only sanctioned way to ask about platform state is the REST API. So the migration wasn't really a version bump. It was replacing an assumption that was woven through the whole codebase (Fig. 1).</p>
+                    </div>
+
+                    <figure class="plate spill" id="fig1">
+                        <div class="plate-scroll">
+                            <svg viewBox="0 0 900 320" role="img" aria-label="Before: an Airflow worker task reads the metadata database directly using DagBag and an ORM session. After: the worker calls the Airflow API server over HTTPS, and only the API server touches the database.">
+                                <defs>
+                                    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M0,0 L10,5 L0,10 z" class="d-arrow"></path>
+                                    </marker>
+                                    <marker id="arhi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M0,0 L10,5 L0,10 z" class="d-arrow-hi"></path>
+                                    </marker>
+                                </defs>
+
+                                <rect x="1" y="1" width="432" height="310" class="d-box-alt"></rect>
+                                <text x="20" y="30" class="d-panel">BEFORE · AIRFLOW 2.10</text>
+
+                                <rect x="126" y="58" width="182" height="50" class="d-box"></rect>
+                                <text x="217" y="80" class="d-title" text-anchor="middle">Worker task</text>
+                                <text x="217" y="97" class="d-sub" text-anchor="middle">DagBag · ORM session</text>
+
+                                <line x1="217" y1="108" x2="217" y2="226" class="d-line" marker-end="url(#ar)"></line>
+                                <circle cx="217" cy="167" r="10" class="d-cut-fill"></circle>
+                                <line x1="212.5" y1="162.5" x2="221.5" y2="171.5" class="d-cut"></line>
+                                <line x1="221.5" y1="162.5" x2="212.5" y2="171.5" class="d-cut"></line>
+
+                                <text x="236" y="156" class="d-edge">direct SQL against the</text>
+                                <text x="236" y="172" class="d-edge">metadata database</text>
+                                <text x="236" y="194" class="d-cut-text">removed in Airflow 3</text>
+
+                                <rect x="126" y="230" width="182" height="50" class="d-box"></rect>
+                                <text x="217" y="252" class="d-title" text-anchor="middle">Metadata DB (MySQL)</text>
+                                <text x="217" y="269" class="d-sub" text-anchor="middle">dag_run · task_instance</text>
+
+                                <rect x="467" y="1" width="432" height="310" class="d-box-alt"></rect>
+                                <text x="486" y="30" class="d-panel">AFTER · WHAT WE SHIPPED</text>
+
+                                <rect x="592" y="58" width="182" height="50" class="d-box"></rect>
+                                <text x="683" y="80" class="d-title" text-anchor="middle">Worker task</text>
+                                <text x="683" y="97" class="d-sub" text-anchor="middle">AirflowApiClient</text>
+
+                                <line x1="683" y1="108" x2="683" y2="140" class="d-line-hi" marker-end="url(#arhi)"></line>
+                                <text x="698" y="130" class="d-edge-hi">HTTPS + JSON</text>
+
+                                <rect x="592" y="144" width="182" height="50" class="d-box-hi"></rect>
+                                <text x="683" y="166" class="d-title" text-anchor="middle">Airflow API server</text>
+                                <text x="683" y="183" class="d-sub" text-anchor="middle">/api/v1 → /api/v2</text>
+
+                                <line x1="683" y1="194" x2="683" y2="226" class="d-line" marker-end="url(#ar)"></line>
+                                <text x="698" y="216" class="d-edge">SQLAlchemy</text>
+
+                                <rect x="592" y="230" width="182" height="50" class="d-box"></rect>
+                                <text x="683" y="252" class="d-title" text-anchor="middle">Metadata DB (MySQL)</text>
+                                <text x="683" y="269" class="d-sub" text-anchor="middle">unchanged</text>
+                            </svg>
+                        </div>
+                        <figcaption><span class="figno">Fig. 1</span> · The whole migration in one picture. The arrow on the left is what Airflow 3 deletes. Every place our code drew that arrow (deferrable operators, the rescheduler, the partition sync jobs, the built-table monitor) had to be redrawn through the API server on the right. <b>The database never changed. Only who is allowed to talk to it did.</b></figcaption>
+                    </figure>
+
+                    <div class="col">
+                        <h3>One client, then nine phases</h3>
+                        <p>The first real decision was not to scatter <code>requests.get()</code> calls through nine different files. Instead I built the term's foundation as a single shared client, <code>AirflowApiClient</code>, that every caller goes through. That gave me one place to solve the problems that would otherwise get solved nine slightly different ways: authentication, pagination, timeouts, retries, and the fact that Airflow 3's <code>/api/v2</code> renames a dag run's <code>execution_date</code> to <code>logical_date</code> in both requests and responses.</p>
+                        <p>That rename is why the client translates field names in both directions based on its own base URL. On <code>/api/v1</code> it's a no-op; on <code>/api/v2</code> outgoing <code>execution_date</code> parameters become <code>logical_date</code>, and incoming <code>logical_date</code> values are mirrored back so all eight calling sites keep reading the field they already read. When the version bump finally happens, flipping one Airflow Variable from <code>v1</code> to <code>v2</code> should be the entire change.</p>
+                        <p>Retries caused the most argument, and ended up asymmetric by HTTP verb. The rule I settled on is narrow: only repeat a request when the server provably can't have applied it. A read is safe to repeat, so a timeout or a 502 can be retried. A write isn't. If a <code>clear</code> or <code>delete</code> request times out, the server may well have done the work anyway, and retrying it would clear a second dag run nobody asked me to touch.</p>
+
+                        <div class="tablewrap">
+                            <table class="data">
+                                <caption>Retry policy, by verb</caption>
+                                <thead>
+                                    <tr><th scope="col">Failure</th><th scope="col">GET / HEAD</th><th scope="col">Writes</th></tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td>429, rejected, never applied</td><td class="retry">retry</td><td class="retry">retry</td></tr>
+                                    <tr><td>Connect timeout / proxy error</td><td class="retry">retry</td><td class="retry">retry</td></tr>
+                                    <tr><td>500 · 502 · 503 · 504</td><td class="retry">retry</td><td class="raise">raise</td></tr>
+                                    <tr><td>Read timeout, bare drop</td><td class="retry">retry</td><td class="raise">raise</td></tr>
+                                    <tr><td>401 · 404 · other 4xx</td><td class="raise">raise</td><td class="raise">raise</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <p class="after-table">The same reasoning produced a rule about 404s that caught a real bug later. A 404 only means "this thing doesn't exist" at the handful of endpoints where that's a legitimate answer the caller handles. Everywhere else a 404 means we called a path this server doesn't have, and quietly turning that into "no data" is exactly how a stale API version would fail silently at the version flip.</p>
+                    </div>
+
+                    <div class="spill">
+                        <p class="label">The nine phases, in the order they shipped</p>
+                        <ol class="ledger">
+                            <li>
+                                <span class="ph">1.10</span>
+                                <div>
+                                    <h4>Task-instance state checks</h4>
+                                    <p>The deferrable operator that waits on another DAG's task stopped building a <code>DagBag</code> to find it and started asking the API for the task instance directly.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#251</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.11</span>
+                                <div>
+                                    <h4>The post-date rescheduler</h4>
+                                    <p>The riskiest single file: it finds dag runs in a date range, clears them, and recreates them. Four ORM operations became four API calls, shipped behind a canary gate, widened, then graduated with the legacy path deleted. Three pull requests and one deliberate walk-back; see Section 3.2.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#253 · #254 · #255</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.12</span>
+                                <div>
+                                    <h4>Manual partition sync</h4>
+                                    <p><code>arbitrary_sync</code> rewritten onto the client, including the discovery that our <code>dry_run</code> flag was not actually dry: the underlying call still paged through and mutated task instances.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#256</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.13</span>
+                                <div>
+                                    <h4>Facebook connection upserts</h4>
+                                    <p>A DAG that wrote Airflow <em>Connections</em> straight into the database with <code>settings.Session</code>. Now it creates and updates them over the API, which also means the webserver's own encryption path handles the credentials instead of ours.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#260</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.14</span>
+                                <div>
+                                    <h4>A correctness bug found on the way</h4>
+                                    <p>While rewriting the built-table operator I found its "last successful run" lookup was reading a field that does not mean what the name suggests. Fixing it was not part of the migration, but leaving a known wrong answer in place while rewriting the code around it was not an option.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#261</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.15</span>
+                                <div>
+                                    <h4>Partitioned MySQL sync</h4>
+                                    <p>The dynamic sync task groups (the ones that generate 150+ DAGs from config) plus the built-table dependency monitor. Canary-gated on a single sync DAG for a week, then graduated across all of them.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#261 · #263</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.16</span>
+                                <div>
+                                    <h4>Deleting a guard instead of porting it</h4>
+                                    <p>A block in the built-tables DAG queried the XCom table directly to audit a race condition. On Airflow 3 that race can't happen, because XCom reads go through the API, so the right migration was to delete the audit and keep the real guard underneath it. Not every line needs a new home.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#265</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.17</span>
+                                <div>
+                                    <h4>One-file version swap</h4>
+                                    <p>Finished the v1/v2 normalization inside the client so the eventual upgrade is a configuration change rather than a diff across every caller.</p>
+                                </div>
+                                <div class="pr"><span class="state">merged</span>#265</div>
+                            </li>
+                            <li>
+                                <span class="ph">1.18</span>
+                                <div>
+                                    <h4>Raw metadata SQL → REST</h4>
+                                    <p>The last cluster of direct SQL, split by risk. Two files converted outright; the two whose failure modes are silent ship a REST path that only observes and logs while the existing SQL stays authoritative.</p>
+                                </div>
+                                <div class="pr"><span class="state state--shadow">in review</span>shadow phase</div>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3.2 shipping safely -->
+            <section class="band" id="shipping-safely">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">3.2</span>
+                        <p class="railtag">Blast radius</p>
+                        <p class="note">Canary width over five weeks: <b>1 → 7 → all 308</b>.</p>
+                    </div>
+                    <div class="col">
+                        <h2>How I shipped it without breaking the pipeline</h2>
+                        <p>Every phase in the ledger touched code that production runs hundreds of times a day. We have no staging environment that reproduces a month of real scheduling, so "it worked locally" is a much weaker claim than it feels like. What I leaned on instead was keeping each change's blast radius small on purpose and only widening it once production had proven the new path (Fig. 2).</p>
+                    </div>
+
+                    <figure class="plate spill" id="fig2">
+                        <div class="plate-scroll">
+                            <svg viewBox="0 0 900 340" role="img" aria-label="A five-rung rollout ladder showing how many of 308 DAGs used the new REST path at each step: zero, then one canary DAG, then a premature full graduation that was reverted before merge, then seven DAGs, then all 308.">
+                                <text x="206" y="24" class="d-panel">SHARE OF THE 308 PRODUCTION DAGS ON THE NEW PATH</text>
+
+                                <text x="192" y="56" class="d-row-title" text-anchor="end">Both paths in the code</text>
+                                <text x="192" y="72" class="d-row-sub" text-anchor="end">PR #251</text>
+                                <rect x="206" y="44" width="624" height="22" class="d-track"></rect>
+                                <text x="218" y="59" class="d-bar-label">0 DAGs: new path written, gate closed</text>
+
+                                <text x="192" y="116" class="d-row-title" text-anchor="end">Canary gate opens</text>
+                                <text x="192" y="132" class="d-row-sub" text-anchor="end">PR #251 → prod</text>
+                                <rect x="206" y="104" width="624" height="22" class="d-track"></rect>
+                                <rect x="206" y="104" width="6" height="22" class="d-bar"></rect>
+                                <text x="224" y="119" class="d-bar-label">1 DAG (~0.3%): one real schedule, watched for a week</text>
+
+                                <text x="192" y="176" class="d-row-title" text-anchor="end">Premature graduation</text>
+                                <text x="192" y="192" class="d-row-sub" text-anchor="end">reverted in dev</text>
+                                <rect x="206" y="164" width="624" height="22" class="d-track"></rect>
+                                <rect x="206.6" y="164.6" width="622.8" height="20.8" class="d-bar-void"></rect>
+                                <text x="218" y="179" class="d-cut-text">all 308: caught in dev verification and walked back</text>
+
+                                <text x="192" y="236" class="d-row-title" text-anchor="end">Widen the canary</text>
+                                <text x="192" y="252" class="d-row-sub" text-anchor="end">PR #253</text>
+                                <rect x="206" y="224" width="624" height="22" class="d-track"></rect>
+                                <rect x="206" y="224" width="15" height="22" class="d-bar"></rect>
+                                <text x="233" y="239" class="d-bar-label">7 DAGs (~2%): each picked to exercise a different branch</text>
+
+                                <text x="192" y="296" class="d-row-title" text-anchor="end">Graduate</text>
+                                <text x="192" y="312" class="d-row-sub" text-anchor="end">PR #254 · #255</text>
+                                <rect x="206" y="284" width="624" height="22" class="d-bar"></rect>
+                                <text x="218" y="299" class="d-bar-label-in">all 308 DAGs: gate and legacy code deleted</text>
+                            </svg>
+                        </div>
+                        <figcaption><span class="figno">Fig. 2</span> · The rescheduler, rung by rung. The new code ships first with nobody using it, then one DAG, then seven. <b>The third rung is the one I didn't plan for:</b> I removed the gate early, and dev verification caught a bug in the REST delete call that production had never exercised, because the canary DAG's 09:00 schedule meant its midnight branch never ran.</figcaption>
+                    </figure>
+
+                    <div class="col">
+                        <h3>The bug only a wider canary could find</h3>
+                        <p>That third rung is the most useful thing that happened to me this term. The canary had been green for days, so removing the gate felt like a formality. It wasn't. The REST client had a header bug that only showed up on <code>delete</code> requests with no body, and the one canary DAG I'd chosen ran at 09:00. The code path that deletes a midnight-scheduled run had never executed once in a week of "successful" production runs.</p>
+                        <p>A green canary doesn't mean the new path works. It means the parts of the new path that this DAG's schedule happens to reach work. So when I widened it, I stopped picking DAGs by importance and started picking them by <em>which branch they force</em>: two that run at exactly 00:00 UTC to exercise the delete-and-recreate path, and five on off-midnight schedules to exercise the clear-and-create path. Seven DAGs chosen that way tell you far more than fifty chosen at random.</p>
+
+                        <h3>Shadow probing, and why I trust it less than I expected</h3>
+                        <p>Phase 1.18 included two files where being wrong wouldn't announce itself. If the built-table monitor's dependency check is subtly wrong, monitors defer forever and built tables silently go stale: no error, green dashboards, and stale numbers in reports for however long it takes someone to notice. If the alerting DAG's failed-task query is wrong, it either pages people for nothing or, worse, quietly stops paging them at all.</p>
+                        <p>For those two I shipped a shadow phase: the existing SQL stays authoritative and keeps controlling the run, while the new REST implementation recomputes the same answer alongside it and does nothing but log whether the two agree.</p>
+                    </div>
+
+                    <figure class="plate spill" id="fig3">
+                        <div class="plate-scroll">
+                            <svg viewBox="0 0 900 275" role="img" aria-label="A monitor task splits into two lanes. The authoritative SQL lane computes the dependency decision and controls whether the built table runs. The shadow lane recomputes the same answer over REST, compares it, and only writes a log line with no effect on the run.">
+                                <defs>
+                                    <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M0,0 L10,5 L0,10 z" class="d-arrow"></path>
+                                    </marker>
+                                    <marker id="ar3hi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M0,0 L10,5 L0,10 z" class="d-arrow-hi"></path>
+                                    </marker>
+                                </defs>
+
+                                <rect x="2" y="110" width="156" height="54" class="d-box-alt"></rect>
+                                <text x="80" y="132" class="d-title" text-anchor="middle">Built-table monitor</text>
+                                <text x="80" y="149" class="d-sub" text-anchor="middle">every hour</text>
+
+                                <path d="M158,137 H184 V78 H208" class="d-line" marker-end="url(#ar3)"></path>
+                                <path d="M184,137 V196 H208" class="d-line-hi" marker-end="url(#ar3hi)"></path>
+
+                                <text x="212" y="34" class="d-panel">AUTHORITATIVE · CONTROLS THE RUN</text>
+
+                                <rect x="212" y="52" width="178" height="52" class="d-box"></rect>
+                                <text x="301" y="74" class="d-title" text-anchor="middle">SQL on metadata</text>
+                                <text x="301" y="91" class="d-sub" text-anchor="middle">unchanged</text>
+
+                                <line x1="390" y1="78" x2="422" y2="78" class="d-line" marker-end="url(#ar3)"></line>
+
+                                <rect x="426" y="52" width="152" height="52" class="d-box"></rect>
+                                <text x="502" y="83" class="d-title" text-anchor="middle">deps-met decision</text>
+
+                                <line x1="578" y1="78" x2="610" y2="78" class="d-line" marker-end="url(#ar3)"></line>
+
+                                <rect x="614" y="52" width="284" height="52" class="d-box"></rect>
+                                <text x="756" y="74" class="d-title" text-anchor="middle">Built table runs, or defers</text>
+                                <text x="756" y="91" class="d-sub" text-anchor="middle">real consequences</text>
+
+                                <text x="212" y="162" class="d-panel">SHADOW · OBSERVES ONLY</text>
+
+                                <rect x="212" y="170" width="178" height="52" class="d-box-hi"></rect>
+                                <text x="301" y="192" class="d-title" text-anchor="middle">Same question, REST</text>
+                                <text x="301" y="209" class="d-sub" text-anchor="middle">AirflowApiClient</text>
+
+                                <line x1="390" y1="196" x2="422" y2="196" class="d-line-hi" marker-end="url(#ar3hi)"></line>
+
+                                <rect x="426" y="170" width="152" height="52" class="d-box-hi"></rect>
+                                <text x="502" y="201" class="d-title" text-anchor="middle">compare answers</text>
+
+                                <line x1="578" y1="196" x2="610" y2="196" class="d-line-hi" marker-end="url(#ar3hi)"></line>
+
+                                <rect x="614" y="170" width="284" height="52" class="d-box-hi"></rect>
+                                <text x="756" y="192" class="d-title" text-anchor="middle">logs MATCH or DIVERGENCE</text>
+                                <text x="756" y="209" class="d-sub" text-anchor="middle">cannot fail the task, cannot page</text>
+
+                                <line x1="756" y1="232" x2="756" y2="246" class="d-line-dead"></line>
+                                <line x1="728" y1="248" x2="784" y2="248" class="d-line"></line>
+                                <text x="756" y="266" class="d-bar-label" text-anchor="middle">dead end by design</text>
+                            </svg>
+                        </div>
+                        <figcaption><span class="figno">Fig. 3</span> · A shadow probe is a second opinion nobody has to act on. Both lanes answer the same question, but only the top lane is allowed to change anything. The probe is wrapped so it can't fail its task, and its notification settings are explicitly stripped, because <b>a task that gets externally killed fails regardless of what its code does,</b> and a diagnostic should never be able to wake someone up.</figcaption>
+                    </figure>
+
+                    <div class="col">
+                        <p>Building it taught me more about its limits than its strengths. Three problems showed up right away. The REST endpoint I needed returns a single page capped at 100 rows with no pagination, so comparing over the same two-week window the SQL uses would silently truncate on high-frequency DAGs and report a divergence on every run, forever. That kind of false alarm trains everyone to ignore the one signal the probe exists to produce. So the probe narrows <em>both</em> sides to a 12-hour window, skips any DAG whose page came back full rather than judging it on partial data, and samples twice an hour instead of on all ten cycles, because at roughly one API call per active DAG it would otherwise add about 900 requests an hour to the same webserver that serves the UI.</p>
+                        <p>Even with all that, a clean shadow log is weaker evidence than it feels like. It proves the two implementations agreed on the traffic that actually happened, in the window that was actually compared. It says nothing about the rare branch that didn't run, which is exactly the failure the canary story above had already taught me to worry about. I still think shadowing was the right call for those two files. I just no longer treat it as proof.</p>
+
+                        <div class="inset">
+                            <p class="label">What I'd do differently</p>
+                            <p>Before shipping, I'd write down the specific code branches a safety mechanism can't reach, and treat that list as the remaining risk instead of feeling reassured just because a probe exists. Both times I got burned this term, it was by a branch no green signal ever covered.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3.3 other work -->
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">3.3</span>
+                        <p class="railtag">Other work</p>
+                    </div>
+                    <div class="col">
+                        <h2>Work outside the migration</h2>
+                        <p>Not everything was Airflow internals. Two other projects took me into different parts of the business, including a language I had barely written professionally before.</p>
+                    </div>
+
+                    <div class="spill">
+                        <div class="entries">
+                            <article class="entry">
+                                <p class="entry-meta"><span class="tk">ARB-9</span>airflow-data-pipeline<br>Python · Athena · FTP</p>
+                                <div class="entry-body">
+                                    <h3>Rebuilding a report from a different file</h3>
+                                    <p>A partner stopped delivering the daily traffic-quality file in September 2025, and the report had been empty ever since. Rather than wait for them to start it up again, I built a DAG that reads the hourly file they <em>do</em> still deliver and rolls it up to daily grain: grouping by tag, device and market, summing impressions and clicks, and computing traffic quality as a clicks-weighted average rather than a plain mean.</p>
+                                    <p>The validation is the part I'm proud of: I ran it against dates from before the outage and confirmed the partitions it produced matched the original daily-file loads exactly, weighted values included. That turned "this looks right" into evidence, and it also made the nine-month gap backfillable.</p>
+                                </div>
+                            </article>
+
+                            <article class="entry">
+                                <p class="entry-meta"><span class="tk">ARB-46</span>afs-common<br>afs-cron-jobs<br>PHP · Google Ads v24</p>
+                                <div class="entry-body">
+                                    <h3>Adding a new Google campaign type in PHP</h3>
+                                    <p>Google's Demand Gen campaigns don't fit the shape our campaign-submission code assumed. They have no network settings, since channel targeting lives on the ad group instead. They reject most of our bid strategies. Their ads are multi-asset and need portrait marketing images we had no model for. And an ad group has no type at all, which broke a field the code had always treated as mandatory.</p>
+                                    <p>The work spanned both PHP repositories: new models for the ad and image types, channel-control building in the API wrapper, a campaign-creation path in the traffic source handler, and the worker changes that let a Demand Gen row flow through submission end to end. It was a good reminder that "add a new type" is rarely additive. It's mostly finding the assumptions the old types let you get away with. This one was still in flight when the term ended, which is its own lesson in how much of a mature codebase a "small" new feature ends up touching.</p>
+                                </div>
+                            </article>
+
+                            <article class="entry">
+                                <p class="entry-meta"><span class="tk">DATA-1081</span>documentation<br>~1,800 lines of Markdown</p>
+                                <div class="entry-body">
+                                    <h3>A migration plan that outlives me</h3>
+                                    <p>The migration is tracked in a Markdown plan in the repo: every phase, its risk level, whether it can deploy on 2.10, what shipped, what was deliberately deferred, and, most importantly, why certain awkward-looking decisions must not be "simplified" away by whoever touches them next.</p>
+                                    <p>My term ended with phases 1.19 through 2.7 still ahead, so this document is the real deliverable for whoever picks it up. Writing it changed how I think about documentation. The valuable part isn't what the code does; it's the reasoning that would otherwise only exist in my head.</p>
+                                </div>
+                            </article>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= 4 GOALS ================= -->
+        <section id="goals">
+            <div class="band band--sunk">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">4</span>
+                        <p class="railtag">Learning goals</p>
+                    </div>
+                    <div class="col">
+                        <h2>What I set out to learn</h2>
+                        <p class="lede">Three goals, set in the first week of May, with the action plan and measures I wrote at the time and a reflection added at the end of August. Two of them landed. One didn't, and the reason it didn't is the most useful thing in this section.</p>
+                    </div>
+                    <figure class="photo photo--band spill">
+                        <img src="img/goals-planning.jpg" alt="Two people planning over notebooks and laptops">
+                        <figcaption>Goals set in week one, graded in week sixteen.</figcaption>
+                    </figure>
+                </div>
+            </div>
+
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <p class="railtag">Goal 01</p>
+                        <p class="note">A personal reference doc of commands, and the contexts each one suits, is what made this stick.</p>
+                    </div>
+                    <div class="col">
+                        <article class="goal">
+                            <header class="goal-head">
+                                <span class="goal-no">01</span>
+                                <div>
+                                    <p class="goal-comp">Literacy · technological literacy</p>
+                                    <h3>Use AI as a development tool, not a search box</h3>
+                                    <p class="goal-state"><i class="sw sw--met"></i>status: met</p>
+                                </div>
+                            </header>
+                            <div class="goal-body">
+                                <p class="label">Goal</p>
+                                <p>Become proficient at using Claude Code as a development tool: knowing when to reach for it, how to prompt it effectively, and how to verify its output rather than just accepting it.</p>
+
+                                <p class="label">Action plan</p>
+                                <ul class="dash">
+                                    <li>Use slash commands regularly during the migration work: <code>/code-review</code> before submitting PRs, <code>/verify</code> after making changes locally, <code>/simplify</code> on complex rewrites</li>
+                                    <li>When debugging a DAG failure, practice letting Claude query the MCP servers (Airflow API, Docker logs, Athena) instead of doing it manually, and measure whether I get to root cause faster</li>
+                                    <li>Before writing a new piece of code, try <code>/plan</code> or describe the task and compare its approach to what I would have done, noting where it was useful and where it missed context I had to supply</li>
+                                </ul>
+
+                                <p class="label">Measure of success</p>
+                                <ul class="dash">
+                                    <li>A diverse set of common commands documented, along with the contexts I use them in</li>
+                                    <li>Providing log information through MCP rather than copying and pasting it into the chat</li>
+                                    <li>Using more advanced prompting on hard problems (simulating a panel of experts, comparing multiple approaches, evaluating solutions) instead of relying on straightforward prompts</li>
+                                </ul>
+
+                                <div class="reflection">
+                                    <p class="label">Reflection</p>
+                                    <p>I'm very proud of how far I've come in learning to work with AI effectively. The difference feels like going from manually typing URLs into a browser to discovering that Google Search exists. I no longer think of Claude as simply a tool that I ask questions to; I now have a consistent workflow for using it as a development tool.</p>
+                                    <p>When starting a task, I usually begin with a <code>/plan</code> prompt and make it very descriptive, often using multiple paragraphs to explain the problem, context, constraints, and what I am trying to accomplish. This helps me move beyond the basic results that can come from a simple prompt. It also creates a conversation between Claude and myself, allowing me to refine the direction of a project until the approach is much closer to what I originally had in mind. Once the task is completed, I use <code>/simplify</code> and <code>/verify</code> to make sure the code is clean, follows the intended approach, and passes the tests we have created. I also find myself using <code>/copy</code> frequently, which is much quicker and more consistent than manually dragging my mouse to select text. For smaller or unrelated questions, I use <code>/btw</code>, which has helped me maintain stronger context in the main conversation without interrupting the task I am working on.</p>
+                                    <p>Andrew, a previous boss, also taught me in detail how to implement MCPs into Claude and explained the benefits of using Claude through WSL. This has completely changed how I use Claude because it can access the information it needs directly instead of requiring me to repeatedly copy and paste logs or other context into the conversation. Using WSL has also given me a more reliable development environment where many of the commands I use work as expected without the same issues I sometimes encounter in Windows.</p>
+                                    <p>I think one of the biggest reasons I have been successful with this is the reference document I created outlining the different Claude commands and the contexts in which I use them. I put this together by researching two different blogs written by people experimenting with Claude and learning from their experiences. Having that reference encouraged me to deliberately use different commands whenever I encountered a problem. Over time, this has become second nature. I no longer consciously think, "I need to use a Claude command here"; using commands has simply become a mandatory part of my development workflow.</p>
+                                    <p>Overall, I feel that I have moved beyond simply using AI to write code and have learned how to work with it as a development partner. I am much more intentional about how I prompt it, how I provide context, and how I verify its output. This has made me significantly more confident and effective when using AI throughout my development work.</p>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+
+                    <figure class="plate spill" id="fig4">
+                        <div class="plate-scroll">
+                            <svg viewBox="0 0 900 262" role="img" aria-label="A development loop from slash-plan, to writing code, to slash-simplify, slash-verify, slash-code-review and opening a pull request, with an iterate arrow returning to the coding step. Below, three MCP servers (the Airflow REST API, Docker container logs and Athena) feed directly into the loop instead of being copy-pasted.">
+                                <defs>
+                                    <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M0,0 L10,5 L0,10 z" class="d-arrow"></path>
+                                    </marker>
+                                    <marker id="ar4hi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                        <path d="M0,0 L10,5 L0,10 z" class="d-arrow-hi"></path>
+                                    </marker>
+                                </defs>
+
+                                <path d="M826,42 V20 H226 V38" class="d-line" marker-end="url(#ar4)"></path>
+                                <text x="526" y="14" class="d-edge" text-anchor="middle">iterate</text>
+
+                                <rect x="14" y="42" width="124" height="48" class="d-box-hi"></rect>
+                                <text x="76" y="64" class="d-sub" text-anchor="middle">/plan</text>
+                                <text x="76" y="79" class="d-sub" text-anchor="middle">long, specific</text>
+
+                                <line x1="138" y1="66" x2="160" y2="66" class="d-line" marker-end="url(#ar4)"></line>
+
+                                <rect x="164" y="42" width="124" height="48" class="d-box"></rect>
+                                <text x="226" y="71" class="d-title" text-anchor="middle">write the code</text>
+
+                                <line x1="288" y1="66" x2="310" y2="66" class="d-line" marker-end="url(#ar4)"></line>
+
+                                <rect x="314" y="42" width="124" height="48" class="d-box-hi"></rect>
+                                <text x="376" y="71" class="d-sub" text-anchor="middle">/simplify</text>
+
+                                <line x1="438" y1="66" x2="460" y2="66" class="d-line" marker-end="url(#ar4)"></line>
+
+                                <rect x="464" y="42" width="124" height="48" class="d-box-hi"></rect>
+                                <text x="526" y="71" class="d-sub" text-anchor="middle">/verify</text>
+
+                                <line x1="588" y1="66" x2="610" y2="66" class="d-line" marker-end="url(#ar4)"></line>
+
+                                <rect x="614" y="42" width="124" height="48" class="d-box-hi"></rect>
+                                <text x="676" y="71" class="d-sub" text-anchor="middle">/code-review</text>
+
+                                <line x1="738" y1="66" x2="760" y2="66" class="d-line" marker-end="url(#ar4)"></line>
+
+                                <rect x="764" y="42" width="124" height="48" class="d-box"></rect>
+                                <text x="826" y="71" class="d-title" text-anchor="middle">open the PR</text>
+
+                                <rect x="276" y="136" width="352" height="16" class="d-label-bg"></rect>
+                                <text x="452" y="148" class="d-edge-hi" text-anchor="middle">read directly over MCP, no copy-pasting logs into the chat</text>
+
+                                <line x1="196" y1="190" x2="196" y2="94" class="d-line-hi" marker-end="url(#ar4hi)"></line>
+                                <line x1="426" y1="190" x2="426" y2="94" class="d-line-hi" marker-end="url(#ar4hi)"></line>
+                                <line x1="656" y1="190" x2="656" y2="94" class="d-line-hi" marker-end="url(#ar4hi)"></line>
+
+                                <text x="14" y="208" class="d-panel">MCP</text>
+                                <text x="14" y="222" class="d-panel">SERVERS</text>
+
+                                <rect x="101" y="190" width="190" height="46" class="d-box-alt"></rect>
+                                <text x="196" y="218" class="d-title" text-anchor="middle">Airflow REST API</text>
+
+                                <rect x="331" y="190" width="190" height="46" class="d-box-alt"></rect>
+                                <text x="426" y="218" class="d-title" text-anchor="middle">Docker container logs</text>
+
+                                <rect x="561" y="190" width="190" height="46" class="d-box-alt"></rect>
+                                <text x="656" y="218" class="d-title" text-anchor="middle">Athena queries</text>
+                            </svg>
+                        </div>
+                        <figcaption><span class="figno">Fig. 4</span> · The workflow I actually settled into. The loop matters less than the arrows coming up from the bottom: connecting MCP servers meant Claude could read a failing task's log, a DAG run's history or a query result itself, <b>instead of me deciding in advance which twenty lines of log to paste in,</b> which is exactly where I used to lose the context that mattered.</figcaption>
+                    </figure>
+                </div>
+            </div>
+
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <p class="railtag">Goal 02</p>
+                        <p class="note">Two of three legs met. The debugger is the one I never picked up.</p>
+                    </div>
+                    <div class="col">
+                        <article class="goal">
+                            <header class="goal-head">
+                                <span class="goal-no">02</span>
+                                <div>
+                                    <p class="goal-comp">Global understanding · civic knowledge &amp; engagement</p>
+                                    <h3>Move my workflow into the IDE</h3>
+                                    <p class="goal-state"><i class="sw sw--partial"></i>status: partial</p>
+                                </div>
+                            </header>
+                            <div class="goal-body">
+                                <p class="label">Goal</p>
+                                <p>Become proficient at using PyCharm's built-in tooling to replace terminal workflows, reducing context switching and doing more of the development loop inside the IDE.</p>
+
+                                <p class="label">Action plan</p>
+                                <ul class="dash">
+                                    <li>Become proficient with PyCharm's Git integration: staging, committing and pushing through the IDE, reviewing diffs, resolving merge conflicts with the three-way merge tool, and navigating history through the log graph</li>
+                                    <li>Configure and use the Docker integration to manage the development container and pipeline stack: starting and stopping containers, monitoring logs, and inspecting status without leaving the editor</li>
+                                    <li>Develop proficiency with the debugger: setting breakpoints, stepping through execution, and inspecting state instead of relying on log statements</li>
+                                </ul>
+
+                                <p class="label">Measure of success</p>
+                                <ul class="dash">
+                                    <li>Complete an entire development workflow (change, diff, commit, push) without relying on the terminal</li>
+                                    <li>Diagnose and resolve an issue in operator code using breakpoints and step-through execution instead of inserting print or logging statements</li>
+                                    <li>Know which parts of my workflow are genuinely better in the IDE, and where the terminal remains the right tool</li>
+                                </ul>
+
+                                <div class="reflection">
+                                    <p class="label">Reflection</p>
+                                    <p>The terminal doesn't feel like a terminal anymore with my new understanding of PyCharm. Previously, I was so focused on the folder explorer and code editor that I barely interacted with many of PyCharm's other features. Now, I find myself using the Commit, Pull Requests, and Services windows far more frequently.</p>
+                                    <p>The Commit window has made it much easier to commit and push changes directly from PyCharm. I especially like being able to write larger, more detailed commit messages, which gives me much more flexibility than I originally had. The Pull Requests window has also made it easy to quickly see which pull requests have been merged and which are still active without having to leave the IDE.</p>
+                                    <p>The Services window, and specifically its Docker integration, is probably my favourite part. Being able to control Docker directly from PyCharm has been a huge improvement. It allows me to see the health and status of each container and easily access their logs, making the entire data pipeline much easier to understand. I find the logs much cleaner and easier to visualize than using the Docker application itself. It also means I don't have to dedicate a terminal window to Docker while still having everything I need available in one organized location.</p>
+                                    <p>For understanding PyCharm's debugger, however, I honestly didn't make much progress. Instead, I found that my debugging knowledge in Airflow improved significantly. The main reason is that when I wanted to test something later in the code, I found it easier to navigate and control tasks directly through Airflow than to navigate through the multiple program files we have and potentially fail to simulate a production run correctly by setting breakpoints. While this didn't directly accomplish the debugger portion of my goal, it did improve how I approach debugging problems in our actual development environment.</p>
+                                    <p>Overall, I feel content but not completely satisfied with my progress on this goal. I believe I could have made even more progress with PyCharm's Git tools, particularly by learning how to use the Git history to determine whether changes were made on another branch or whether I am a few commits behind the master branch. I also still found myself creating branches through the terminal instead of using PyCharm's built-in branch management. Part of this was because I once accidentally ended up working on master instead of the branch I had created. I became frustrated after realizing I had to redo a significant amount of work, and that experience made me more hesitant to experiment with a new workflow.</p>
+                                    <p>Despite these shortcomings, I'm happy with the progress I made and plan to continue developing these skills through my independent projects and at school. I'm actually proud that I found myself choosing PyCharm over the infamous Visual Studio on my personal computer, which is something I never expected when I started this goal.</p>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </div>
+
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <p class="railtag">Goal 03</p>
+                        <p class="note">The goal that turned into Section 3.2: canary width, and what a shadow probe cannot prove.</p>
+                    </div>
+                    <div class="col">
+                        <article class="goal">
+                            <header class="goal-head">
+                                <span class="goal-no">03</span>
+                                <div>
+                                    <p class="goal-comp">Critical &amp; creative thinking · depth &amp; breadth of understanding</p>
+                                    <h3>Test small, and know when a change is ready</h3>
+                                    <p class="goal-state"><i class="sw sw--met"></i>status: met</p>
+                                </div>
+                            </header>
+                            <div class="goal-body">
+                                <p class="label">Goal</p>
+                                <p>Develop a disciplined approach to testing changes safely: keeping the blast radius small, validating locally before touching production, and knowing when a change is ready to ship.</p>
+
+                                <p class="label">Action plan</p>
+                                <ul class="dash">
+                                    <li>Develop a strong understanding of the separation between development and production: the purpose of development-specific schemas and storage locations, the safeguards they provide, and the boundaries between environments</li>
+                                    <li>Before modifying shared operators, utilities or common components, identify every dependent system and validate against the smallest affected workflow first</li>
+                                    <li>Apply incremental deployment: validate on a limited set of workflows before rolling a change across the codebase</li>
+                                </ul>
+
+                                <p class="label">Measure of success</p>
+                                <p>Being able to state, before shipping, exactly how much of production a change can affect if I am wrong, and having a path to widen it deliberately rather than all at once.</p>
+
+                                <div class="reflection">
+                                    <p class="label">Reflection</p>
+                                    <p>Testing small was something I was completely unfamiliar with before this co-op. The main reason was that I had never worked as part of a large development team. In my personal projects, if something went wrong, I was the only person who had to deal with the consequences. Working in a team environment showed me the intricacies of using branches, staging, rebasing, squashing, and the importance of keeping commits organized and meaningful. I also learned how important it is to communicate information through Markdown documentation and, most importantly, to make sure the team's shared database remains intact so everyone can continue working on their own schedules without being affected by someone else's changes.</p>
+                                    <p>The strongest method I found for testing small and minimizing the impact of potential issues was canary testing. Instead of immediately replacing the existing path that all of our DAGs used, I could leave the old path running normally while having only a handful of the roughly 300 DAGs use the new path. That meant if something went wrong, the impact was limited to about one percent of the workflows rather than potentially affecting the entire database and pipeline. This approach worked extremely well because the team felt comfortable with what I was pushing and understood that the potential consequences were limited if something did go wrong.</p>
+                                    <p>I also experimented with another method called shadow probing. This involved keeping the existing path running normally while running my new code path alongside it. The new path would not affect the actual workflow but would instead print logs showing what its results would have been. While this sounded like a great way to safely test changes, learning this method actually made me less confident in relying on it in the future. The biggest issue I found was that some of the logs could be incorrect, while certain bugs could exist without ever producing a log that would alert me to the problem. This made it very easy to believe that everything was working correctly when there could still be issues that had gone undetected.</p>
+                                    <p>Overall, I'm happy with the results of this goal because it taught me that even safety mechanisms can have their own limitations. I learned to never completely trust logs as proof that something is working correctly and to think critically about what a testing method can and cannot validate. At the same time, I learned how valuable canary deployments can be when working with shared systems. Canary testing proved to be extremely helpful throughout my work, and it is a skill and development practice that I definitely plan to continue using in the future.</p>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </div>
+
+            <div class="band band--sunk">
+                <div class="grid">
+                    <div class="rail">
+                        <p class="railtag">Scorecard</p>
+                    </div>
+                    <div class="col">
+                        <h3>What the scorecard actually says</h3>
+                        <p>Two of the three goals landed, and the one that didn't fell short for a reason worth recording. I met the AI goal comfortably, and I met the safe-testing goal in a way I didn't expect. I set out to learn how to protect production and ended up learning how safety mechanisms mislead you, which turned out to be more useful.</p>
+                        <p>The IDE goal came apart on its third leg. I got the Git and Docker integrations well past my measures of success, but I never learned the debugger, because every time I needed it there was a faster path available: driving tasks directly in Airflow. That's a defensible trade, and I don't regret any individual instance of it. Looking back, though, the pattern is the problem. I skipped the unfamiliar tool whenever a familiar one would do, which is exactly how a skill gap survives a four-month term. There was a specific hesitation behind it too. Losing work by accidentally committing to master early on made me reluctant to try unfamiliar workflows on real branches, and I let that reluctance stand instead of practising the workflow somewhere safe.</p>
+                        <p>Given how much of this term was about deliberately reducing risk in production, there's some irony in the fact that the one goal I fell short on fell short because I wouldn't take a small risk in my own tooling. That's the honest version, and it's the goal I'm carrying into next term.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= 5 CONCLUSION ================= -->
+        <section id="conclusion">
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">5</span>
+                        <p class="railtag">Conclusion</p>
+                        <p class="note">Phases <b>1.19 → 2.7</b> were still on the plan the day the term ended.</p>
+                    </div>
+                    <div class="col">
+                        <h2>What this term taught me</h2>
+                        <p>Last term I wrote that data engineering is mostly about trust: whether the next engineer can trust that your pipeline produces what it claims to. This term tested a narrower version of that question. What's reasonable to trust as <em>evidence</em>? I merged eight migration phases and left a ninth in review, and the two mistakes I remember most both came from treating a green signal as proof. A canary that ran clean for a week hid a bug in a branch its schedule never reached. A shadow probe that logs agreement can only ever speak for the traffic it actually saw.</p>
+                        <p>Those aren't really failures of testing; they're failures of reading the test correctly. The fix that stuck wasn't more testing, it was getting specific about coverage. When I widened the canary, I chose DAGs by which code branch their schedule forces (two at midnight to hit the delete path, five off-midnight to hit the clear path) rather than by how important they were. That shift, from "how much have I tested?" to "which branches has nothing reached yet?", is the most transferable thing I took from the term.</p>
+
+                        <blockquote class="quote">
+                            <p>“A green log is not proof that the code works. It is proof that the code ran, on the inputs it happened to get.”</p>
+                        </blockquote>
+
+                        <p class="label">Three things I'm taking with me</p>
+                        <ol class="takeaways">
+                            <li><b>Size the blast radius before writing the code, not after.</b> Deciding up front that a change will reach one DAG on its first day changes how you build it: you add the gate, keep the old path intact, and leave yourself somewhere to retreat to. Retrofitting that later is much harder, and by then the pressure is just to ship.</li>
+                            <li><b>Write down the reasoning, not the behaviour.</b> The most valuable parts of the migration plan are the notes explaining why something awkward has to stay awkward: why the shadow probe compares a narrower window than the query it shadows, why retries are asymmetric by verb. Code shows what it does. Only prose can stop the next person from helpfully undoing it.</li>
+                            <li><b>Tools compound, and skipping one has a cost you don't see.</b> The Claude workflow and the IDE integrations I did build made me measurably faster over four months. The debugger I kept avoiding was the same kind of win, and I just never collected it. Small tooling investments are cheapest exactly when you feel too busy for them.</li>
+                        </ol>
+
+                        <p>If someone described this site back to me, I'd want them to say it was about a co-op student handed a migration that couldn't be allowed to break anything, who spent the term learning to be honest about what he actually knew was working. The Airflow API client and the phases behind it are the artifacts. The judgement about evidence is what I'm taking into the next term, and probably the one after that.</p>
+                    </div>
+
+                    <figure class="photo photo--band spill">
+                        <img src="img/conclusion-summit.jpg" alt="Mountain peaks rising above a sea of cloud at sunrise">
+                        <figcaption>Written the week the term ended.</figcaption>
+                    </figure>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= 6 THANKS ================= -->
+        <section id="acknowledgements">
+            <div class="band">
+                <div class="grid">
+                    <div class="rail">
+                        <span class="secnum">6</span>
+                        <p class="railtag">Thanks</p>
+                        <figure class="photo photo--sq">
+                            <img src="img/ack-team.jpg" alt="A team working together around a table of laptops">
+                            <figcaption>Stock photography, real gratitude.</figcaption>
+                        </figure>
+                    </div>
+                    <div class="col">
+                        <h2>People who made this term work</h2>
+                        <p>A migration like this one isn't something a co-op student gets to run alone. Several people gave me the room, the review and the tooling that made it possible.</p>
+                    </div>
+
+                    <div class="spill">
+                        <div class="acks">
+                            <div class="ack">
+                                <div>
+                                    <h3>Jeet Patel</h3>
+                                    <p class="role">Reviewer on all ten pull requests</p>
+                                </div>
+                                <p>Jeet reviewed and approved every pull request I opened this term, including the ones that touched shared operators every DAG inherits from. His reviews kept pushing on the questions I hadn't asked myself yet: what happens on the retry, what happens when this returns nothing, what happens to the DAGs you aren't thinking about. Several of the rules that ended up in the API client exist because a review comment made me try to justify a shortcut I couldn't actually justify.</p>
+                            </div>
+                            <div class="ack">
+                                <div>
+                                    <h3>Andrew Gorrie</h3>
+                                    <p class="role">Development tooling</p>
+                                </div>
+                                <p>Andrew taught me how to wire MCP servers into Claude and why working through WSL is worth the setup. That one conversation is the reason my first learning goal went as well as it did. It moved me from pasting fragments of logs into a chat window to letting the tool read the source itself. A lot of what I got done this term rests on tooling he showed me how to build.</p>
+                            </div>
+                            <div class="ack">
+                                <div>
+                                    <h3>The AdKnown engineering team</h3>
+                                    <p class="role">Guelph, Ontario</p>
+                                </div>
+                                <p>Returning for a second term meant being trusted with the migration rather than eased into it, and the team's patience with my canary-gated, walked-back, deliberately slow approach made that possible. Nobody pushed me to ship faster than I could defend, which is a specific kind of good engineering culture, and one I didn't fully appreciate until I had something risky to ship.</p>
+                            </div>
+                            <div class="ack">
+                                <div>
+                                    <h3>Guelph Co-op Office</h3>
+                                    <p class="role">Bachelor of Computing co-op</p>
+                                </div>
+                                <p>Thanks to the Bachelor of Computing co-op coordinators (Laura Gatto, Kate McRoberts and Anne-Marie Zawadzki) and to the University of Guelph co-op program, for the placement structure that put me on a production data platform for four terms rather than one, which is the only reason a project of this length was mine to own.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer>
+        <div class="grid">
+            <p class="stamp"><img src="img/GryphonLogo.png" alt="University of Guelph">Report no. 4<br>Aug 2026</p>
+            <p class="colophon"><b>Alex Daniel.</b> Summer 2026 co-op work term report, written at the end of my fourth term at the University of Guelph. Set in the reader's system sans and monospace faces. Hand-written HTML and CSS, no framework; the four figures are inline SVG. Photography from <a href="https://unsplash.com">Unsplash</a>.</p>
+            <p class="flinks">
+                <a href="#home">Back to top</a>
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        const navLinks = document.querySelectorAll('.masthead nav a');
+        const sections = document.querySelectorAll('main > section[id]');
+
+        window.addEventListener('scroll', () => {
+            let current = 'home';
+            sections.forEach(section => {
+                if (window.scrollY >= section.offsetTop - 120) {
+                    current = section.id;
+                }
+            });
+            navLinks.forEach(link => {
+                link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+            });
+        }, { passive: true });
+    </script>
+
+</body>
+</html>
