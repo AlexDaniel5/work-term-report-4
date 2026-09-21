@@ -1,12 +1,3 @@
-/* ============================================================
-   Summer 2026 work term report, Alex Daniel
-   Set in the reader's system UI and monospace faces. Laid out as a document: a
-   left metadata rail carries section numbers and margin notes,
-   the text column is fixed at a readable measure, and figures
-   spill into the right gutter. Hierarchy comes from rules and
-   spacing, and there are no cards in this stylesheet.
-   ============================================================ */
-
 :root {
     color-scheme: light;
 
@@ -779,7 +770,7 @@ footer p {
     max-width: 62ch;
 }
 
-footer .colophon { grid-column: 2; }
+footer .colophon { grid-column: 2 / 4; max-width: 92ch; }
 
 footer .flinks {
     grid-column: 3;
